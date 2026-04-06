@@ -1,6 +1,9 @@
 .DS_Store
 *.log
 .env
+dump.rdb
+node_modules/
+.claude-logistics/
 
 # Service repos — cloned by setup.sh, each has its own git
 bt-auth-service/
