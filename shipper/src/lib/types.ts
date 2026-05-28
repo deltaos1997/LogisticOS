@@ -1,4 +1,4 @@
-export type BookingStatus = 'pending' | 'accepted' | 'negotiating' | 'in_transit' | 'completed' | 'cancelled'
+export type BookingStatus = 'pending' | 'accepted' | 'negotiating' | 'in_transit' | 'completed' | 'cancelled' | 'paid'
 export type BookingType = 'direct' | 'auction'
 export type QuoteStatus = 'submitted' | 'countered' | 'accepted' | 'rejected' | 'withdrawn' | 'expired'
 
@@ -26,6 +26,8 @@ export interface Booking {
   target_driver_id: string | null
   auction_deadline: string | null
   awarded_quote_id: string | null
+  in_transit_at: string | null
+  completed_at: string | null
   created_at: string
   updated_at: string
 }

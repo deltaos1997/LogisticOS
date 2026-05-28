@@ -7,6 +7,7 @@ export const bookingStatusConfig: Record<BookingStatus, { label: string; color: 
   in_transit:  { label: 'In Transit',  color: 'bg-purple-100 text-purple-800' },
   completed:   { label: 'Completed',   color: 'bg-gray-100 text-gray-600' },
   cancelled:   { label: 'Cancelled',   color: 'bg-red-100 text-red-800' },
+  paid:        { label: 'Paid',        color: 'bg-emerald-100 text-emerald-800' },
 }
 
 export const quoteStatusConfig: Record<QuoteStatus, { label: string; color: string }> = {

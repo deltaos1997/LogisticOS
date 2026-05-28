@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useCallback, use } from 'react'
+import { useEffect, useState, useCallback, useRef, use } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
 import {
@@ -10,6 +10,9 @@ import {
   counterQuote,
   withdrawQuote,
   getQuoteHistory,
+  startTrip,
+  completeTrip,
+  pushLocation,
   ApiError,
 } from '@/lib/api'
 import type { Booking, Quote, NegotiationEntry } from '@/lib/types'
@@ -191,6 +194,7 @@ function BookingDetailsCard({ booking }: { booking: Booking }) {
 // --- Submit Quote Form ---
 
 function SubmitQuoteForm({ booking, onSubmitted }: { booking: Booking; onSubmitted: () => void }) {
+  const router = useRouter()
   const [amount, setAmount] = useState('')
   const [message, setMessage] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -212,7 +216,14 @@ function SubmitQuoteForm({ booking, onSubmitted }: { booking: Booking; onSubmitt
       toast.success('Quote submitted!')
       onSubmitted()
     } catch (err) {
-      if (err instanceof ApiError) toast.error(err.message)
+      if (err instanceof ApiError) {
+        if (err.code === 'DRIVER_PROFILE_NOT_FOUND') {
+          toast.error('Set up your driver profile first')
+          router.push('/profile')
+          return
+        }
+        toast.error(err.message)
+      }
     } finally {
       setSubmitting(false)
     }
@@ -312,36 +323,41 @@ function QuoteStatusSection({
     }
   }
 
-  // --- Accepted: celebration ---
-  if (quote.status === 'accepted') {
+  // --- Accepted: start trip ---
+  if (quote.status === 'accepted' && booking.status === 'accepted') {
     return (
-      <div className="space-y-4">
-        <div className="bg-green-50 rounded-2xl border-2 border-green-400 p-6 text-center animate-celebrate shadow-sm">
-          <div className="text-4xl mb-2">&#127881;</div>
-          <h3 className="text-xl font-bold text-green-800 mb-1">You got the job!</h3>
-          <p className="text-sm text-green-700 mb-4">The shipper has accepted your quote.</p>
-          <div className="bg-white rounded-xl p-4 text-left space-y-2">
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-500">Final Amount</span>
-              <span className="text-lg font-bold text-green-700">{formatPrice(booking.final_price ?? quote.amount)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-500">Pickup</span>
-              <span className="text-sm font-medium">{formatDate(booking.pickup_date)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-500">From</span>
-              <span className="text-sm font-medium text-right max-w-[200px] truncate">{booking.source_address}</span>
-            </div>
-            <div className="flex justify-between">
-              <span className="text-sm text-gray-500">To</span>
-              <span className="text-sm font-medium text-right max-w-[200px] truncate">{booking.destination_address}</span>
-            </div>
-          </div>
-        </div>
-        {history.length > 0 && (
-          <NegotiationHistorySection history={history} show={showHistory} onToggle={onToggleHistory} />
-        )}
+      <AcceptedTripSection booking={booking} quote={quote} onRefresh={onRefresh} />
+    )
+  }
+
+  // --- In Transit: active trip ---
+  if (booking.status === 'in_transit') {
+    return (
+      <ActiveTripSection booking={booking} onRefresh={onRefresh} />
+    )
+  }
+
+  // --- Paid ---
+  if (booking.status === 'paid') {
+    return (
+      <div className="bg-emerald-50 rounded-2xl border-2 border-emerald-400 p-6 text-center shadow-sm">
+        <svg className="w-10 h-10 text-emerald-500 mx-auto mb-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <h3 className="text-xl font-bold text-emerald-800 mb-1">Payment Received</h3>
+        <p className="text-sm text-emerald-700">Shipper has confirmed payment.</p>
+        <p className="text-lg font-bold text-emerald-700 mt-3">{formatPrice(booking.final_price ?? quote.amount)}</p>
+      </div>
+    )
+  }
+
+  // --- Completed ---
+  if (booking.status === 'completed') {
+    return (
+      <div className="bg-green-50 rounded-2xl border-2 border-green-400 p-6 text-center shadow-sm">
+        <h3 className="text-xl font-bold text-green-800 mb-1">Trip Completed</h3>
+        <p className="text-sm text-green-700">Delivered successfully. Awaiting payment.</p>
+        <p className="text-lg font-bold text-green-700 mt-3">{formatPrice(booking.final_price ?? quote.amount)}</p>
       </div>
     )
   }
@@ -575,6 +591,252 @@ function CounterForm({
           </button>
         </div>
       </form>
+    </div>
+  )
+}
+
+// --- Negotiation History ---
+
+// --- Accepted: Start Trip ---
+
+function AcceptedTripSection({
+  booking,
+  quote,
+  onRefresh,
+}: {
+  booking: Booking
+  quote: Quote
+  onRefresh: () => void
+}) {
+  const [starting, setStarting] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
+
+  async function handleStart() {
+    setStarting(true)
+    try {
+      await startTrip(booking.id)
+      toast.success('Trip started — GPS tracking is now active')
+      onRefresh()
+    } catch (err) {
+      if (err instanceof ApiError) toast.error(err.message)
+    } finally {
+      setStarting(false)
+      setShowConfirm(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-green-50 rounded-2xl border-2 border-green-400 p-5 shadow-sm">
+        <h3 className="text-lg font-bold text-green-800 mb-1">You got the job!</h3>
+        <p className="text-sm text-green-700 mb-4">
+          {formatPrice(booking.final_price ?? quote.amount)} &middot; Pickup {formatDate(booking.pickup_date)}
+        </p>
+
+        <div className="bg-white rounded-xl p-3 space-y-2 text-sm mb-4">
+          <div className="flex justify-between">
+            <span className="text-gray-500">From</span>
+            <span className="font-medium text-right max-w-[200px] truncate">{booking.source_address}</span>
+          </div>
+          <div className="flex justify-between">
+            <span className="text-gray-500">To</span>
+            <span className="font-medium text-right max-w-[200px] truncate">{booking.destination_address}</span>
+          </div>
+        </div>
+
+        {!showConfirm ? (
+          <button
+            onClick={() => setShowConfirm(true)}
+            className="w-full h-12 rounded-xl bg-green-600 text-white font-semibold text-base active:scale-[0.98] transition-transform"
+          >
+            Start Trip
+          </button>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm text-green-800 font-medium text-center">
+              Confirm you have loaded the cargo and are ready to depart?
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="flex-1 h-11 rounded-xl border border-gray-300 text-gray-600 font-medium text-sm"
+              >
+                Not Yet
+              </button>
+              <button
+                onClick={handleStart}
+                disabled={starting}
+                className="flex-1 h-11 rounded-xl bg-green-600 text-white font-semibold text-sm disabled:opacity-40 flex items-center justify-center gap-2"
+              >
+                {starting ? <Spinner className="h-4 w-4 border-white border-t-transparent" /> : 'Yes, Start Trip'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// --- In Transit: Active Trip with GPS ---
+
+function ActiveTripSection({
+  booking,
+  onRefresh,
+}: {
+  booking: Booking
+  onRefresh: () => void
+}) {
+  const [completing, setCompleting] = useState(false)
+  const [showDeliverConfirm, setShowDeliverConfirm] = useState(false)
+  const [gpsActive, setGpsActive] = useState(false)
+  const [gpsError, setGpsError] = useState<string | null>(null)
+  const [elapsed, setElapsed] = useState('')
+  const watchRef = useRef<number | null>(null)
+  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
+  // Start GPS tracking on mount — best-effort, never blocks trip flow
+  useEffect(() => {
+    if (!navigator.geolocation) {
+      setGpsError('Location tracking will be active on mobile devices')
+      return
+    }
+
+    let gotFix = false
+    const timeoutId = setTimeout(() => {
+      // After 10s without a fix, assume desktop/no-GPS environment
+      if (!gotFix) {
+        setGpsError('Location unavailable on this device — tracking will activate on mobile')
+        setGpsActive(false)
+      }
+    }, 10_000)
+
+    const watchId = navigator.geolocation.watchPosition(
+      (position) => {
+        gotFix = true
+        clearTimeout(timeoutId)
+        setGpsActive(true)
+        setGpsError(null)
+        pushLocation({
+          lat: position.coords.latitude,
+          lng: position.coords.longitude,
+          heading: position.coords.heading ?? undefined,
+          speed_kmh: position.coords.speed ? position.coords.speed * 3.6 : undefined,
+          accuracy_m: position.coords.accuracy ?? undefined,
+          booking_id: booking.id,
+        }).catch(() => {
+          // silent — location push failures shouldn't block the UI
+        })
+      },
+      (err) => {
+        if (err.code === 1) {
+          clearTimeout(timeoutId)
+          setGpsError('Location access denied — enable in browser settings')
+          setGpsActive(false)
+        }
+        // code 2 (POSITION_UNAVAILABLE) and 3 (TIMEOUT): let the 10s timer handle it
+      },
+      { enableHighAccuracy: false, maximumAge: 30_000, timeout: 15_000 },
+    )
+    watchRef.current = watchId
+
+    return () => {
+      clearTimeout(timeoutId)
+      navigator.geolocation.clearWatch(watchId)
+    }
+  }, [booking.id])
+
+  // Elapsed time counter
+  useEffect(() => {
+    const start = new Date(booking.updated_at ?? Date.now()).getTime()
+    function update() {
+      const diff = Date.now() - start
+      const h = Math.floor(diff / 3_600_000)
+      const m = Math.floor((diff % 3_600_000) / 60_000)
+      setElapsed(h > 0 ? `${h}h ${m}m` : `${m}m`)
+    }
+    update()
+    intervalRef.current = setInterval(update, 30_000)
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current)
+    }
+  }, [booking.in_transit_at])
+
+  async function handleComplete() {
+    setCompleting(true)
+    try {
+      if (watchRef.current !== null) {
+        navigator.geolocation.clearWatch(watchRef.current)
+      }
+      await completeTrip(booking.id)
+      toast.success('Trip completed!')
+      onRefresh()
+    } catch (err) {
+      if (err instanceof ApiError) toast.error(err.message)
+    } finally {
+      setCompleting(false)
+      setShowDeliverConfirm(false)
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      <div className="bg-purple-50 rounded-2xl border-2 border-purple-400 p-5 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-bold text-purple-800">Trip In Progress</h3>
+          <span className="text-sm font-medium text-purple-600">{elapsed}</span>
+        </div>
+
+        {/* GPS status */}
+        <div className={`flex items-center gap-2 rounded-xl p-2 mb-3 ${
+          gpsActive ? 'bg-green-100' : gpsError ? 'bg-gray-100' : 'bg-yellow-100'
+        }`}>
+          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
+            gpsActive ? 'bg-green-500 animate-pulse' : gpsError ? 'bg-gray-400' : 'bg-yellow-500 animate-pulse'
+          }`} />
+          <span className={`text-xs font-medium ${
+            gpsActive ? 'text-green-700' : gpsError ? 'text-gray-500' : 'text-yellow-700'
+          }`}>
+            {gpsActive ? 'Location active — sharing with shipper' : gpsError ?? 'Acquiring location...'}
+          </span>
+        </div>
+
+        {/* Destination */}
+        <div className="bg-white rounded-xl p-3 text-sm mb-4">
+          <p className="text-xs text-gray-400 uppercase tracking-wide mb-1">Delivering to</p>
+          <p className="font-medium text-gray-900">{booking.destination_address}</p>
+        </div>
+
+        {!showDeliverConfirm ? (
+          <button
+            onClick={() => setShowDeliverConfirm(true)}
+            className="w-full h-12 rounded-xl bg-purple-600 text-white font-semibold text-base active:scale-[0.98] transition-transform"
+          >
+            Mark as Delivered
+          </button>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-sm text-purple-800 font-medium text-center">
+              Confirm the cargo has been delivered?
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowDeliverConfirm(false)}
+                className="flex-1 h-11 rounded-xl border border-gray-300 text-gray-600 font-medium text-sm"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleComplete}
+                disabled={completing}
+                className="flex-1 h-11 rounded-xl bg-purple-600 text-white font-semibold text-sm disabled:opacity-40 flex items-center justify-center gap-2"
+              >
+                {completing ? <Spinner className="h-4 w-4 border-white border-t-transparent" /> : 'Yes, Delivered'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

@@ -10,7 +10,10 @@ import {
   rejectQuote,
   counterQuote,
   cancelBooking,
+  getBookingLocation,
+  markAsPaid,
 } from '@/lib/api'
+import type { DriverLocation } from '@/lib/api'
 import { bookingStatusConfig, quoteStatusConfig } from '@/lib/status'
 import type { Booking, Quote } from '@/lib/types'
 import Navbar from '@/components/Navbar'
@@ -128,7 +131,7 @@ export default function BookingDetailPage({
   }
 
   const status = bookingStatusConfig[booking.status]
-  const canCancel = !['cancelled', 'completed', 'in_transit'].includes(booking.status)
+  const canCancel = !['cancelled', 'completed', 'in_transit', 'paid'].includes(booking.status)
 
   return (
     <>
@@ -207,6 +210,33 @@ export default function BookingDetailPage({
             </div>
           )}
         </div>
+
+        {/* Trip Tracking */}
+        {(['accepted', 'in_transit', 'completed', 'paid'] as const).includes(booking.status as 'accepted' | 'in_transit' | 'completed' | 'paid') && (
+          <TripTrackingSection booking={booking} />
+        )}
+
+        {/* Payment Section */}
+        {booking.status === 'completed' && (
+          <PaymentSection booking={booking} onPaid={fetchData} />
+        )}
+
+        {/* Payment Complete */}
+        {booking.status === 'paid' && (
+          <div className="bg-emerald-50 rounded-xl border border-emerald-200 p-5 flex items-center gap-4">
+            <div className="w-10 h-10 rounded-full bg-emerald-100 flex items-center justify-center shrink-0">
+              <svg className="w-5 h-5 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+              </svg>
+            </div>
+            <div>
+              <p className="font-semibold text-emerald-800">Payment Complete</p>
+              <p className="text-sm text-emerald-600">
+                Marked as paid on {new Date(booking.updated_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+              </p>
+            </div>
+          </div>
+        )}
 
         {/* Quotes Panel */}
         <div className="bg-white rounded-xl border border-gray-200">
@@ -346,6 +376,222 @@ export default function BookingDetailPage({
         </div>
       )}
     </>
+  )
+}
+
+// --- Trip Tracking Section ---
+
+function TripTrackingSection({ booking }: { booking: Booking }) {
+  const [location, setLocation] = useState<DriverLocation | null>(null)
+  const [pollError, setPollError] = useState(false)
+
+  useEffect(() => {
+    if (booking.status !== 'in_transit') return
+
+    let cancelled = false
+
+    async function poll() {
+      try {
+        const loc = await getBookingLocation(booking.id)
+        if (!cancelled) {
+          setLocation(loc)
+          setPollError(false)
+        }
+      } catch {
+        if (!cancelled) setPollError(true)
+      }
+    }
+
+    poll()
+    const interval = setInterval(poll, 10_000)
+    return () => {
+      cancelled = true
+      clearInterval(interval)
+    }
+  }, [booking.id, booking.status])
+
+  const steps = [
+    { key: 'accepted', label: 'Driver Assigned' },
+    { key: 'in_transit', label: 'In Transit' },
+    { key: 'completed', label: 'Delivered' },
+    { key: 'paid', label: 'Paid' },
+  ]
+  const currentIndex = steps.findIndex(s => s.key === booking.status)
+
+  function timeSince(dateStr: string): string {
+    const diff = Date.now() - new Date(dateStr).getTime()
+    const s = Math.floor(diff / 1000)
+    if (s < 60) return `${s}s ago`
+    const m = Math.floor(s / 60)
+    if (m < 60) return `${m}m ago`
+    const h = Math.floor(m / 60)
+    return `${h}h ${m % 60}m ago`
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
+      <h2 className="font-semibold text-gray-900">Trip Status</h2>
+
+      {/* Progress steps */}
+      <div className="flex items-center gap-1">
+        {steps.map((step, i) => {
+          const done = i <= currentIndex
+          return (
+            <div key={step.key} className="flex-1 flex flex-col items-center gap-1">
+              <div className={`h-1.5 w-full rounded-full ${done ? 'bg-green-500' : 'bg-gray-200'}`} />
+              <span className={`text-xs ${done ? 'text-green-700 font-medium' : 'text-gray-400'}`}>
+                {step.label}
+              </span>
+            </div>
+          )
+        })}
+      </div>
+
+      {/* Status-specific content */}
+      {booking.status === 'accepted' && (
+        <p className="text-sm text-gray-600">Driver has been assigned. Waiting for trip to start.</p>
+      )}
+
+      {booking.status === 'in_transit' && (
+        <div className="space-y-3">
+          {location ? (
+            <div className="bg-gray-50 rounded-lg p-3 space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-gray-500">Location</span>
+                <span className="font-mono text-gray-700">{location.lat.toFixed(5)}, {location.lng.toFixed(5)}</span>
+              </div>
+              {location.speed_kmh !== null && (
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Speed</span>
+                  <span className="text-gray-700">{Math.round(location.speed_kmh)} km/h</span>
+                </div>
+              )}
+              {location.heading !== null && (
+                <div className="flex justify-between">
+                  <span className="text-gray-500">Heading</span>
+                  <span className="text-gray-700">{Math.round(location.heading)}&deg;</span>
+                </div>
+              )}
+              <div className="flex justify-between">
+                <span className="text-gray-500">Last update</span>
+                <span className="text-gray-700">{timeSince(location.updated_at)}</span>
+              </div>
+            </div>
+          ) : pollError ? (
+            <p className="text-sm text-red-500">Could not fetch driver location.</p>
+          ) : (
+            <p className="text-sm text-gray-500">Waiting for driver location...</p>
+          )}
+        </div>
+      )}
+
+      {booking.status === 'completed' && (
+        <p className="text-sm text-green-700 font-medium">
+          Delivered {booking.completed_at ? `on ${new Date(booking.completed_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}` : 'successfully'}.
+        </p>
+      )}
+
+      {booking.status === 'paid' && (
+        <p className="text-sm text-emerald-700 font-medium">
+          Delivered and paid.
+        </p>
+      )}
+    </div>
+  )
+}
+
+// --- Payment Section (for completed bookings) ---
+
+function PaymentSection({ booking, onPaid }: { booking: Booking; onPaid: () => void }) {
+  const [marking, setMarking] = useState(false)
+  const [showConfirm, setShowConfirm] = useState(false)
+
+  async function handleMarkPaid() {
+    setMarking(true)
+    try {
+      await markAsPaid(booking.id)
+      toast.success('Payment marked as complete')
+      onPaid()
+    } catch (err: unknown) {
+      toast.error(err instanceof Error ? err.message : 'Failed to mark as paid')
+    } finally {
+      setMarking(false)
+      setShowConfirm(false)
+    }
+  }
+
+  return (
+    <div className="bg-white rounded-xl border border-gray-200 p-5 space-y-4">
+      <h2 className="font-semibold text-gray-900">Payment</h2>
+      <p className="text-sm text-gray-500">
+        Cargo has been delivered. Choose how to settle payment of{' '}
+        <span className="font-semibold text-gray-900">
+          {'\u20B9'}{(booking.final_price ?? booking.quoted_price).toLocaleString('en-IN')}
+        </span>
+      </p>
+
+      <div className="grid sm:grid-cols-2 gap-3">
+        {/* RazorPay placeholder */}
+        <div className="relative border border-gray-200 rounded-lg p-4 opacity-60 cursor-not-allowed">
+          <span className="absolute top-2 right-2 text-[10px] font-semibold uppercase tracking-wide bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full">
+            Coming Soon
+          </span>
+          <div className="flex items-center gap-3 mb-2">
+            <div className="w-8 h-8 rounded bg-blue-50 flex items-center justify-center">
+              <svg className="w-4 h-4 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+              </svg>
+            </div>
+            <div>
+              <p className="text-sm font-medium text-gray-900">Pay on Platform</p>
+              <p className="text-xs text-gray-400">UPI, Card, Net Banking via RazorPay</p>
+            </div>
+          </div>
+        </div>
+
+        {/* Mark as Paid */}
+        {!showConfirm ? (
+          <button
+            onClick={() => setShowConfirm(true)}
+            className="border-2 border-emerald-200 rounded-lg p-4 text-left hover:bg-emerald-50 transition-colors"
+          >
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 rounded bg-emerald-50 flex items-center justify-center">
+                <svg className="w-4 h-4 text-emerald-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+              </div>
+              <div>
+                <p className="text-sm font-medium text-gray-900">Mark as Paid</p>
+                <p className="text-xs text-gray-400">Payment settled offline or via other method</p>
+              </div>
+            </div>
+          </button>
+        ) : (
+          <div className="border-2 border-emerald-300 bg-emerald-50 rounded-lg p-4 space-y-3">
+            <p className="text-sm text-emerald-800 font-medium">
+              Confirm payment of {'\u20B9'}{(booking.final_price ?? booking.quoted_price).toLocaleString('en-IN')} has been made?
+            </p>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setShowConfirm(false)}
+                className="flex-1 px-3 py-2 text-sm border border-gray-300 rounded-lg hover:bg-white transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleMarkPaid}
+                disabled={marking}
+                className="flex-1 px-3 py-2 text-sm bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
+              >
+                {marking && <Spinner className="h-4 w-4 border-white border-t-transparent" />}
+                Confirm Paid
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
   )
 }
 
